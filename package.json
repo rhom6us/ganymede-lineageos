@@ -6,7 +6,8 @@
   "scripts": {
     "build": "md-to-pdf guide.md --config-file pdf.config.js",
     "restore": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/restore.ps1",
-    "restore:check": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/restore.ps1 -DryRun"
+    "restore:check": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/restore.ps1 -DryRun",
+    "postinstall": "npm run restore"
   },
   "devDependencies": {
     "md-to-pdf": "^5.2.4"
