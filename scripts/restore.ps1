@@ -8,9 +8,10 @@ $ProgressPreference    = "SilentlyContinue"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $DestDir  = Join-Path $RepoRoot "downloads"
+$Throttle = 6
 
 function Write-Step([string]$msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
-function Write-Ok  ([string]$msg) { Write-Host "[ok] $msg" -ForegroundColor Green }
+function Write-Ok  ([string]$msg) { Write-Host "[ok] $msg"   -ForegroundColor Green }
 function Write-Skip([string]$msg) { Write-Host "[skip] $msg" -ForegroundColor DarkGray }
 
 if (-not (Test-Path $DestDir)) {
@@ -18,7 +19,7 @@ if (-not (Test-Path $DestDir)) {
   if (-not $DryRun) { New-Item -ItemType Directory -Path $DestDir | Out-Null }
 }
 
-# ----- platform-tools via winget -----
+# ----- platform-tools via winget (sequential) -----
 Write-Step "platform-tools (winget Google.PlatformTools)"
 $winget = Get-Command winget -ErrorAction SilentlyContinue
 if (-not $winget) {
@@ -34,83 +35,86 @@ if (-not $winget) {
   }
 }
 
-# ----- helper: download from a direct URL -----
-function Save-DirectUrl {
-  param(
-    [Parameter(Mandatory)] [string]$Url,
-    [Parameter(Mandatory)] [string]$DestName,
-    [string]$Label = $null
-  )
-  $what = if ($Label) { $Label } else { $DestName }
-  Write-Step $what
-  $dest = Join-Path $DestDir $DestName
-  if (Test-Path $dest) {
-    Write-Skip "$DestName already downloaded"
-    return $dest
+# ----- parallel downloads -----
+$tasks = @(
+  [pscustomobject]@{
+    Kind  = 'direct'
+    Label = 'LineageOS 17.1 ROM (Wasabi mirror)'
+    Url   = 'https://s3.us-west-1.wasabisys.com/rom-release/LineageOS/17.1/TB-X304F/lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip'
+    Name  = 'lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip'
   }
-  if ($DryRun) {
-    Write-Host "[dry-run] $Url -> $dest"
-    return $dest
-  }
-  Invoke-WebRequest -Uri $Url -OutFile $dest
-  $sizeMb = [math]::Round((Get-Item $dest).Length / 1MB, 1)
-  Write-Ok "$DestName ($sizeMb MB)"
-  return $dest
-}
+  [pscustomobject]@{ Kind='github'; Owner='topjohnwu';    Repo='Magisk';            Pattern='Magisk-v*.apk' }
+  [pscustomobject]@{ Kind='github'; Owner='MindTheGapps'; Repo='10.0.0-arm64';      Pattern='MindTheGapps-10.0.0-arm64-*.zip' }
+  [pscustomobject]@{ Kind='github'; Owner='osm0sis';      Repo='PlayIntegrityFork'; Pattern='*.zip' }
+  [pscustomobject]@{ Kind='github'; Owner='5ec1cff';      Repo='TrickyStore';       Pattern='*.zip' }
+)
 
-# ----- LineageOS 17.1 ROM (Wasabi S3 — direct mirror from XDA OP) -----
-Save-DirectUrl `
-  -Url "https://s3.us-west-1.wasabisys.com/rom-release/LineageOS/17.1/TB-X304F/lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip" `
-  -DestName "lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip" `
-  -Label "LineageOS 17.1 ROM (Wasabi mirror)"
+$total    = $tasks.Count
+$progress = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
 
-# ----- helper: latest GitHub release asset -----
-function Save-LatestAsset {
-  param(
-    [Parameter(Mandatory)] [string]$Owner,
-    [Parameter(Mandatory)] [string]$Repo,
-    [Parameter(Mandatory)] [scriptblock]$Match,
-    [string]$RenameTo = $null
-  )
-  Write-Step "$Owner/$Repo"
-  $hdrs = @{
-    "User-Agent" = "ganymede-lineageos-restore"
-    "Accept"     = "application/vnd.github+json"
+Write-Step "downloading $total artifacts (up to $Throttle in parallel)"
+
+$tasks | ForEach-Object -ThrottleLimit $Throttle -Parallel {
+  $task     = $_
+  $destDir  = $using:DestDir
+  $dryRun   = $using:DryRun
+  $progress = $using:progress
+  $total    = $using:total
+
+  $ErrorActionPreference = 'Stop'
+  $ProgressPreference    = 'SilentlyContinue'
+
+  $label = if ($task.Kind -eq 'direct') { $task.Label } else { "$($task.Owner)/$($task.Repo)" }
+
+  function Tick {
+    param($Status, $Label, $Detail = '')
+    $progress.Add($Label)
+    $n = $progress.Count
+    $msg = "[{0}/{1}] {2}: {3}" -f $n, $total, $Status, $Label
+    if ($Detail) { $msg += " ($Detail)" }
+    $color = switch ($Status) {
+      'done'    { 'Green' }
+      'skip'    { 'DarkGray' }
+      'dry-run' { 'DarkGray' }
+      'err'     { 'Red' }
+      default   { 'Gray' }
+    }
+    Write-Host $msg -ForegroundColor $color
   }
-  $api = "https://api.github.com/repos/$Owner/$Repo/releases/latest"
+
+  Write-Host "[start] $label" -ForegroundColor Cyan
+  $sw = [System.Diagnostics.Stopwatch]::StartNew()
+
   try {
-    $rel = Invoke-RestMethod -Uri $api -Headers $hdrs
-  } catch {
-    Write-Warning "GitHub API call failed for $Owner/$Repo — $($_.Exception.Message)"
-    return
+    if ($task.Kind -eq 'direct') {
+      $dest = Join-Path $destDir $task.Name
+      if (Test-Path $dest) { Tick 'skip' $label "$($task.Name) already downloaded"; return }
+      if ($dryRun)         { Tick 'dry-run' $label "$($task.Url) -> $dest"; return }
+      Invoke-WebRequest -Uri $task.Url -OutFile $dest
+      $mb = [math]::Round((Get-Item $dest).Length / 1MB, 1)
+      $s  = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+      Tick 'done' $label "$($task.Name), $mb MB, ${s}s"
+    }
+    elseif ($task.Kind -eq 'github') {
+      $slug  = "$($task.Owner)/$($task.Repo)"
+      $info  = gh release view --repo $slug --json tagName,assets | ConvertFrom-Json
+      $asset = $info.assets | Where-Object { $_.name -like $task.Pattern } | Select-Object -First 1
+      if (-not $asset) { Tick 'err' $label "no asset matching '$($task.Pattern)' in $($info.tagName)"; return }
+      $dest = Join-Path $destDir $asset.name
+      if (Test-Path $dest) { Tick 'skip' $label "$($asset.name) already downloaded"; return }
+      if ($dryRun)         { Tick 'dry-run' $label "$($asset.name) -> $dest"; return }
+      gh release download --repo $slug --pattern $asset.name --dir $destDir | Out-Null
+      $mb = [math]::Round((Get-Item $dest).Length / 1MB, 1)
+      $s  = [math]::Round($sw.Elapsed.TotalSeconds, 1)
+      Tick 'done' $label "$($asset.name), $mb MB, ${s}s, $($info.tagName)"
+    }
   }
-  $asset = $rel.assets | Where-Object $Match | Select-Object -First 1
-  if (-not $asset) {
-    Write-Warning "no matching asset in $Owner/$Repo $($rel.tag_name)"
-    return
+  catch {
+    Tick 'err' $label $_.Exception.Message
   }
-  $name = if ($RenameTo) { $RenameTo } else { $asset.name }
-  $dest = Join-Path $DestDir $name
-  if (Test-Path $dest) {
-    Write-Skip "$name already downloaded"
-    return $dest
-  }
-  if ($DryRun) {
-    Write-Host "[dry-run] $($asset.browser_download_url) -> $dest"
-    return $dest
-  }
-  Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $dest
-  $sizeMb = [math]::Round((Get-Item $dest).Length / 1MB, 1)
-  Write-Ok "$name ($sizeMb MB) — $($rel.tag_name)"
-  return $dest
 }
 
-Save-LatestAsset -Owner "topjohnwu"     -Repo "Magisk"            -Match { $_.name -match "^Magisk-v[\d\.]+\.apk$" }
-Save-LatestAsset -Owner "MindTheGapps"  -Repo "10.0.0-arm64"      -Match { $_.name -like "MindTheGapps-10.0.0-arm64-*.zip" }
-Save-LatestAsset -Owner "osm0sis"       -Repo "PlayIntegrityFork" -Match { $_.name -like "*.zip" }
-Save-LatestAsset -Owner "5ec1cff"       -Repo "TrickyStore"       -Match { $_.name -like "*.zip" }
-
-# ----- Magisk uninstall.zip safety net -----
+# ----- Magisk uninstall.zip safety net (after downloads) -----
 $magiskApk = Get-ChildItem -Path $DestDir -Filter "Magisk-v*.apk" -ErrorAction SilentlyContinue |
              Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if ($magiskApk) {
