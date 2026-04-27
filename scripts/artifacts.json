@@ -14,7 +14,6 @@
   {
     "kind": "github",
     "id": 2,
-    "label": "Magisk",
     "owner": "topjohnwu",
     "repo": "Magisk",
     "pattern": "Magisk-v*.apk"
@@ -22,7 +21,6 @@
   {
     "kind": "github",
     "id": 3,
-    "label": "MindTheGapps 10.0 arm64",
     "owner": "MindTheGapps",
     "repo": "10.0.0-arm64",
     "pattern": "MindTheGapps-10.0.0-arm64-*.zip"
@@ -30,7 +28,6 @@
   {
     "kind": "github",
     "id": 4,
-    "label": "PlayIntegrityFork",
     "owner": "osm0sis",
     "repo": "PlayIntegrityFork",
     "pattern": "PlayIntegrityFork-v*.zip"
@@ -38,7 +35,6 @@
   {
     "kind": "github",
     "id": 5,
-    "label": "TrickyStore",
     "owner": "5ec1cff",
     "repo": "TrickyStore",
     "pattern": "Tricky-Store-v*.zip"
