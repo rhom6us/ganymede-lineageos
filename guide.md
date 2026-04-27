@@ -14,8 +14,8 @@ Run `npm run restore` from this repo to fetch the items marked **[auto]** into `
 | File | Source | Mode |
 |---|---|---|
 | Platform-tools (adb / fastboot) | `winget install Google.PlatformTools` | [auto] |
-| LineageOS 17.1 zip for TB-X304F | XDA thread (mailru or gdrive mirror) | [manual] |
-| TWRP `tbx304-twrp-3.4.0-20201207.img` | XDA thread (Highwaystar build) | [manual] |
+| LineageOS 17.1 zip for TB-X304F | Wasabi S3 mirror (only mirror in OP) | [auto] |
+| TWRP `tbx304-twrp-3.4.0-20201207.img` | XDA thread (Highwaystar build, mailru/gdrive) | [manual] |
 | MindTheGapps 10.0 **arm64** zip | github.com/MindTheGapps/10.0.0-arm64/releases | [auto] |
 | Magisk latest `.apk` | github.com/topjohnwu/Magisk/releases | [auto] |
 | PlayIntegrityFork (Appendix A only) | github.com/osm0sis/PlayIntegrityFork | [auto] |
@@ -66,31 +66,57 @@ Should list one device. Tap **Allow** on the tablet for the RSA prompt; re-run i
    ```
    fastboot oem unlock-go
    ```
-5. The tablet shows a confirmation prompt. **Volume Up** to highlight unlock, **Power** to confirm.
+5. The tablet may reboot straight into wipe/unlock without prompting; on units that do prompt: **Volume Up** to highlight unlock, **Power** to confirm.
 6. Device reboots and **factory resets**. Re-do dev options + USB debugging from Part 2 after first boot.
 7. Reboot back to fastboot when ready for Part 4 (`adb reboot bootloader`).
 
-If `unlock-go` is rejected with "not allowed" or "permission denied", re-check the OEM unlocking toggle — it must be on before the unlock command.
+### If `unlock-go` returns `FAILED (remote: oem unlock is not allowed)`
+
+The TB-X304F often ships with the underlying `devinfo` unlock-allowed byte set to `00`, regardless of whether the dev-options toggle appears on. The toggle alone doesn't always flip the firmware flag.
+
+If the unlock fails, you need the EDL workaround:
+
+1. Boot to EDL: hold **Volume Up + Volume Down** while connecting USB. Device enumerates as `Qualcomm HS-USB QDLoader 9008` (install QDLoader drivers if Windows doesn't recognize it).
+2. Use **QFIL** or `edl.py` with the OEM `prog_emmc_firehose_8917_ddr.mbn` firehose loader to dump the `devinfo` partition.
+3. Hex-edit the unlock-allowed byte: change the relevant byte from `00` to `01`. (Reference: [XDA TB-X304F unlock guide](https://xdaforums.com/t/4201857/).)
+4. Flash the modified `devinfo` back.
+5. Re-enter fastboot and retry `fastboot oem unlock-go` — should succeed.
+
+This isn't fun but it's a one-time gate.
 
 ---
 
-## Part 4 — Flash TWRP (do not boot it)
+## Part 4 — TWRP
 
-Booting a temporary recovery is unreliable on TB-X304F. Flash to the recovery partition instead.
+The real risk on TB-X304F is **stock recovery overwriting TWRP** if Android boots between TWRP-install and LOS-flash — stock Android contains an `install-recovery.sh` that re-writes `/recovery` on boot. (Once LOS is flashed it disables that script and TWRP persists.)
 
-1. From fastboot:
-   ```
-   fastboot flash recovery tbx304-twrp-3.4.0-20201207.img
-   ```
-2. **Critical:** do NOT let stock Android boot — it overwrites recovery. Hold **Volume Up** while issuing:
-   ```
-   fastboot reboot
-   ```
-   Keep Volume Up held until TWRP appears.
+Two workable patterns. Either is fine; pick one and don't let stock Android boot in the middle.
 
-If you missed the timing and stock booted, repeat the flash from fastboot (`adb reboot bootloader` if you can get USB back, otherwise hold **Power + VolDown** from off to re-enter fastboot).
+### Option A — boot temporarily (recommended)
 
-3. Inside TWRP: choose **Keep Read Only** when prompted, skip the password prompt (no encryption used yet).
+```
+fastboot boot tbx304-twrp-3.4.0-20201207.img
+```
+
+This boots TWRP without writing it to the recovery partition. Proceed straight to Part 5 (push files + flash LOS + GApps + Magisk) from inside this temporary TWRP — when LOS is flashed, its installer takes care of the recovery situation.
+
+### Option B — flash + immediately reboot to TWRP
+
+```
+fastboot flash recovery tbx304-twrp-3.4.0-20201207.img
+```
+
+Then hold **Volume Up** during the next reboot:
+
+```
+fastboot reboot
+```
+
+Keep Volume Up held until TWRP appears. If you miss the timing and stock Android boots first, re-flash from fastboot (`Power + VolDown` from off to re-enter fastboot).
+
+### Inside TWRP
+
+Choose **Keep Read Only** when prompted, skip the password prompt (no encryption yet).
 
 ---
 
@@ -188,21 +214,27 @@ adb push <file> /sdcard/
 
 ## Appendix A — Streaming app compatibility
 
-| App | Stock LOS+root | With PIF + TrickyStore | Widevine | Notes |
+| App | Rooted, no PIF | Rooted, PIF (+ Shamiko if noted) | L3 cap | Notes |
 |---|---|---|---|---|
-| Crunchyroll | ✅ Works | — | L3 | SD/720p ceiling |
-| Prime Video | ✅ Works | — | L3 | Same |
-| Netflix | ❌ Fails (Play Integrity) | ✅ Works (usually) | L3 | Play Store hides app on rooted L3; sideload + PIF |
-| Hulu | ❌ Fails | ✅ Works | L3 | Same |
-| Disney+ | ❌ Fails | ⚠️ Hit-or-miss | L3 | Tightening attestation |
+| Crunchyroll | ✅ Works | ✅ Works | **1080p** | Outlier — every other major streamer is L1-gated for HD |
+| Prime Video | ✅ Mostly works | ✅ Works | 480p–SD | Root-tolerant historically; PIF clears occasional "device not supported" |
+| Netflix | ❌ Hidden in Play Store | ✅ Works (sideload + PIF) | 540p | TrickyStore not needed; BASIC + DEVICE is enough |
+| Hulu | ⚠️ Starts, won't play | ✅ Works (+ Shamiko + DenyList) | 720p | 2025–2026 failure: launches but buffers on press-play |
+| Disney+ | ❌ Blue-screen on launch | ⚠️ Mostly yes (fragile) | 480p–SD | Tightest of the lot; never add GMS to DenyList — breaks PIF |
 
-### Adding Netflix / Hulu later (PIF + TrickyStore setup)
+### Adding Netflix / Hulu later (PIF setup)
 
-1. Run `npm run restore` to fetch **PlayIntegrityFork** + **TrickyStore** zips into `downloads/`.
-2. Push both to the tablet's microSD.
-3. Boot TWRP → Install → flash both. Reboot.
-4. Open Magisk → Modules → both should be enabled.
-5. Sideload Netflix / Hulu APK from APKMirror — pick the **arm64-v8a** variant (NOT arm).
-6. Open the app cold (clear Play Store cache first if previously installed via Play). Should pass attestation; failures usually mean PIF fingerprints need refreshing from the upstream repo.
+PIF v16 is a **Magisk Zygisk module** — flash from the Magisk app, not from TWRP.
+
+1. Run `npm run restore` to fetch **PlayIntegrityFork** (and **TrickyStore** if you also want STRONG integrity, which the streamers above do **not** require) into `downloads/`.
+2. Copy `PlayIntegrityFork-v*.zip` to the tablet (e.g. `adb push downloads/PlayIntegrityFork-v*.zip /sdcard/Download/`).
+3. Open **Magisk** → **Modules** → **Install from storage** → select the PIF zip → reboot when prompted.
+4. (Optional, only if you hit STRONG-integrity gating) repeat for `Tricky-Store-*.zip`. Install order if both are used: TrickyStore first, reboot, then PIF (its `autopif4` post-install detects TrickyStore and self-configures).
+5. Sideload Netflix / Hulu APK from APKMirror — pick the **arm64-v8a** variant (NOT armeabi-v7a).
+6. Open the app cold. If a check fails, run `autopif4` from a root shell to refresh the PIF fingerprint — they expire roughly every 6 weeks.
 
 The TB-X304F is **arm64-v8a** (Cortex-A53 / ARMv8). Always pick the arm64 variant on APKMirror, never `armeabi-v7a`.
+
+### Why TrickyStore is usually not needed here
+
+PIF spoofs the *software-side* fingerprint and props that Play Integrity reads. TrickyStore spoofs the *hardware-side* attestation chain (the `getCertificateChain` keybox forge) — needed only to defeat STRONG-tier verdicts. On Android 10 the Play Integrity verdict ceiling is **BASIC**, so PIF alone is enough for everything in the table above. STRONG only matters for banking-class apps, which are out of scope.

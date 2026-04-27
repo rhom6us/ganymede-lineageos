@@ -8,7 +8,7 @@ This repo contains a printable flashing guide and helper scripts for installing
 
 - Lenovo TB-X304F (Snapdragon 425 / msm8917, **ARMv8 / 64-bit**, Cortex-A53, 2GB / 16GB)
 - Stock: Android 8.1.0, build `TB-X304F_S001014_181113_ROW`
-- Bootloader: OEM unlock toggle is enabled. Path A (`fastboot oem unlock-go`) — **no EDL workaround**.
+- Bootloader: user reports OEM-unlock toggle on, and expects Path A (`fastboot oem unlock-go`) to succeed. **Caveat surfaced by research:** TB-X304F typically ships with the `devinfo` unlock-allowed byte set to `00` regardless of toggle state — `unlock-go` may return `FAILED (remote: oem unlock is not allowed)`. Test before assuming. EDL byte-flip workaround is documented in `guide.md` Part 3 if needed.
 
 ## Three corrections applied (vs original chat draft)
 
@@ -34,11 +34,13 @@ This repo contains a printable flashing guide and helper scripts for installing
 
 - **No EDL / BLUnlocker path.** Skip QDLoader, devinfo hex edits, firehose `.mbn` — not needed. OEM unlock toggle is on.
 - **Flash order:** LineageOS → GApps → Magisk (no reboots between). Wipe cache/dalvik once at end.
-- **TWRP flashed, not booted.** Booting a temp recovery is unreliable on X304F.
+- **TWRP — boot temporarily OR flash, but don't let stock Android boot between TWRP-install and LOS-flash.** Stock Android's `install-recovery.sh` re-writes `/recovery` on boot. The handoff's "booting TWRP is unreliable" claim isn't supported by research — `fastboot boot twrp.img` is the *preferred* community approach. Either path works.
 - **Format Data is mandatory** before LOS flash. Stock 8.1 encryption is incompatible with LOS 17.1.
 - **First boot is 5–10 min.** Multiple bootloop reports in the XDA thread are impatient flashers.
 - **Root stays in.** Streaming targets (Crunchyroll, Prime) are root-tolerant; no banking use case. PIF + TrickyStore workaround for Netflix/Hulu in Appendix A if the user adds them later.
-- **Widevine L3.** SD425 is L3-only — SD/720p ceiling on Netflix / Prime regardless of ROM/root.
+- **Widevine L3.** SD425 is L3-only. Caps are uneven: Crunchyroll plays **1080p** on L3 (outlier), Netflix **540p**, Prime / Disney+ / Max **480p–SD**.
+- **PIF is a Magisk Zygisk module**, not a TWRP-flashable zip. Earlier draft had this wrong — corrected.
+- **TrickyStore is optional for the in-scope streamers.** PIF alone clears Netflix; Hulu also needs Shamiko + DenyList. TrickyStore is only required for STRONG-tier integrity (banking-class apps, out of scope).
 
 ## Things to NOT do
 
