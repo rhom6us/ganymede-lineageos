@@ -2,3 +2,12 @@ node_modules/
 downloads/
 *.pdf
 package-lock.json
+
+# session scratch
+scripts/.tmp-*
+*.stackdump
+.claude/scheduled_tasks.lock
+
+# regenerable working files (extracted from LOS zip / pulled from device)
+boot-stock-los.img
+magisk_patched-*.img
