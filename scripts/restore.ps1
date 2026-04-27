@@ -34,6 +34,36 @@ if (-not $winget) {
   }
 }
 
+# ----- helper: download from a direct URL -----
+function Save-DirectUrl {
+  param(
+    [Parameter(Mandatory)] [string]$Url,
+    [Parameter(Mandatory)] [string]$DestName,
+    [string]$Label = $null
+  )
+  $what = if ($Label) { $Label } else { $DestName }
+  Write-Step $what
+  $dest = Join-Path $DestDir $DestName
+  if (Test-Path $dest) {
+    Write-Skip "$DestName already downloaded"
+    return $dest
+  }
+  if ($DryRun) {
+    Write-Host "[dry-run] $Url -> $dest"
+    return $dest
+  }
+  Invoke-WebRequest -Uri $Url -OutFile $dest
+  $sizeMb = [math]::Round((Get-Item $dest).Length / 1MB, 1)
+  Write-Ok "$DestName ($sizeMb MB)"
+  return $dest
+}
+
+# ----- LineageOS 17.1 ROM (Wasabi S3 — direct mirror from XDA OP) -----
+Save-DirectUrl `
+  -Url "https://s3.us-west-1.wasabisys.com/rom-release/LineageOS/17.1/TB-X304F/lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip" `
+  -DestName "lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip" `
+  -Label "LineageOS 17.1 ROM (Wasabi mirror)"
+
 # ----- helper: latest GitHub release asset -----
 function Save-LatestAsset {
   param(
