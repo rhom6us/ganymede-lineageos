@@ -4,7 +4,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ProgressPreference    = "SilentlyContinue"
+# Leave $ProgressPreference at its default ('Continue') so the main-thread
+# render loop's Write-Progress calls actually emit bars. We no longer call
+# Invoke-WebRequest (HttpClient streaming instead), so there's nothing
+# unwanted to suppress.
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $DestDir  = Join-Path $RepoRoot "downloads"
