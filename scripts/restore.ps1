@@ -45,118 +45,142 @@ foreach ($w in $wingetItems) {
   }
 }
 
-# ----- parallel downloads (direct + github) -----
-# Each task gets a unique id so Write-Progress bars stack instead of colliding.
-# Invoke-WebRequest's default progress uses Id 1 across all callers, so we
-# stream via HttpClient and drive Write-Progress ourselves with the per-task id.
+# ----- parallel downloads via Start-ThreadJob -----
+# We deliberately do NOT use ForEach-Object -Parallel here: Write-Progress
+# emitted from inside parallel runspaces does not render in the parent host
+# (PowerShell/PowerShell#13816, still present as of 7.5). Instead each job
+# updates a synchronized state hashtable, and the main thread polls and
+# renders Write-Progress itself, so the bars actually show.
 $downloadItems = @($artifacts | Where-Object { $_.kind -in 'direct','github' })
 
-$total    = $downloadItems.Count
-$progress = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
+if ($downloadItems.Count -gt 0) {
+  Write-Step "downloading $($downloadItems.Count) artifacts (up to $Throttle in parallel, with progress bars)"
 
-if ($total -gt 0) {
-  Write-Step "downloading $total artifacts (up to $Throttle in parallel, with progress bars)"
+  $state = [hashtable]::Synchronized(@{})
+  foreach ($t in $downloadItems) {
+    $state[$t.id] = [hashtable]::Synchronized(@{
+      activity = if ($t.kind -eq 'direct') { $t.name } else { "$($t.owner)/$($t.repo)" }
+      label    = if ($t.kind -eq 'direct') { $t.label } else { "$($t.owner)/$($t.repo)" }
+      written  = [long]0
+      total    = [long]0
+      status   = 'pending'
+      detail   = ''
+      tag      = ''
+      elapsed  = 0.0
+    })
+  }
 
-  $downloadItems | ForEach-Object -ThrottleLimit $Throttle -Parallel {
-    $task     = $_
-    $destDir  = $using:DestDir
-    $dryRun   = $using:DryRun
-    $progress = $using:progress
-    $total    = $using:total
-
-    $ErrorActionPreference = 'Stop'
-    $ProgressPreference    = 'Continue'
-
-    $label = if ($task.kind -eq 'direct') { $task.label } else { "$($task.owner)/$($task.repo)" }
-
-    function Tick {
-      param($Status, $Label, $Detail = '')
-      $progress.Add($Label)
-      $n = $progress.Count
-      $msg = "[{0}/{1}] {2}: {3}" -f $n, $total, $Status, $Label
-      if ($Detail) { $msg += " ($Detail)" }
-      $color = switch ($Status) {
-        'done'    { 'Green' }
-        'skip'    { 'DarkGray' }
-        'dry-run' { 'DarkGray' }
-        'err'     { 'Red' }
-        default   { 'Gray' }
-      }
-      Write-Host $msg -ForegroundColor $color
-    }
-
-    function Save-WithProgress {
-      param([string]$Url, [string]$Dest, [int]$Id, [string]$Activity, [long]$ExpectedSize = 0)
-      $client = [System.Net.Http.HttpClient]::new()
-      $client.Timeout = [TimeSpan]::FromMinutes(30)
-      $client.DefaultRequestHeaders.Add('User-Agent', 'restore-ps1')
+  $jobs = foreach ($task in $downloadItems) {
+    Start-ThreadJob -ThrottleLimit $Throttle -ArgumentList $task, $state, $DestDir, $DryRun -ScriptBlock {
+      param($task, $state, $destDir, $dryRun)
+      $s  = $state[$task.id]
+      $sw = [System.Diagnostics.Stopwatch]::StartNew()
       try {
-        $resp = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
-        $resp.EnsureSuccessStatusCode() | Out-Null
-        $size = if ($ExpectedSize -gt 0) { $ExpectedSize } else { [long]($resp.Content.Headers.ContentLength ?? 0) }
-        $stream = $resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
-        $file   = [System.IO.File]::Create($Dest)
+        $url = $null; $dest = $null; $expectedSize = [long]0
+        if ($task.kind -eq 'direct') {
+          $dest = Join-Path $destDir $task.name
+          if (Test-Path $dest) { $s.status='skip'; $s.detail="$($task.name) already downloaded"; return }
+          if ($dryRun)         { $s.status='dry-run'; $s.detail="$($task.url) -> $dest"; return }
+          $url = $task.url
+        }
+        elseif ($task.kind -eq 'github') {
+          $slug = "$($task.owner)/$($task.repo)"
+          $info = gh release view --repo $slug --json tagName,assets | ConvertFrom-Json
+          $asset = $info.assets | Where-Object { $_.name -like $task.pattern } | Select-Object -First 1
+          if (-not $asset) { $s.status='err'; $s.detail="no asset matching '$($task.pattern)' in $($info.tagName)"; return }
+          $s.activity = $asset.name
+          $s.tag      = $info.tagName
+          $dest = Join-Path $destDir $asset.name
+          if (Test-Path $dest) { $s.status='skip'; $s.detail="$($asset.name) already downloaded"; return }
+          if ($dryRun)         { $s.status='dry-run'; $s.detail="$($asset.name) -> $dest"; return }
+          $url = $asset.url
+          $expectedSize = [long]$asset.size
+        }
+
+        $s.status = 'downloading'
+        $client = [System.Net.Http.HttpClient]::new()
+        $client.Timeout = [TimeSpan]::FromMinutes(30)
+        $client.DefaultRequestHeaders.Add('User-Agent', 'restore-ps1')
         try {
-          $buffer  = [byte[]]::new(262144)
-          $written = [long]0
-          $last    = [DateTime]::MinValue
-          while (($n = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
-            $file.Write($buffer, 0, $n)
-            $written += $n
-            $now = [DateTime]::UtcNow
-            if (($now - $last).TotalMilliseconds -ge 100) {
-              $last = $now
-              $mb = [math]::Round($written / 1MB, 1)
-              if ($size -gt 0) {
-                $pct = [int][math]::Min(100, ($written * 100) / $size)
-                $tot = [math]::Round($size / 1MB, 1)
-                Write-Progress -Id $Id -Activity $Activity -Status "$mb / $tot MB ($pct%)" -PercentComplete $pct
-              } else {
-                Write-Progress -Id $Id -Activity $Activity -Status "$mb MB"
-              }
+          $resp = $client.GetAsync($url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+          $resp.EnsureSuccessStatusCode() | Out-Null
+          $s.total = if ($expectedSize -gt 0) { $expectedSize } else { [long]($resp.Content.Headers.ContentLength ?? 0) }
+          $stream = $resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+          $file   = [System.IO.File]::Create($dest)
+          try {
+            $buffer  = [byte[]]::new(262144)
+            $written = [long]0
+            while (($n = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+              $file.Write($buffer, 0, $n)
+              $written += $n
+              $s.written = $written
             }
+          } finally {
+            $file.Close()
+            $stream.Close()
           }
         } finally {
-          $file.Close()
-          $stream.Close()
+          $client.Dispose()
         }
-      } finally {
-        $client.Dispose()
-        Write-Progress -Id $Id -Activity $Activity -Completed
+        $finalMb = [math]::Round((Get-Item $dest).Length / 1MB, 1)
+        $name    = Split-Path -Leaf $dest
+        $detail  = "$name, $finalMb MB"
+        if ($s.tag) { $detail += ", $($s.tag)" }
+        $s.detail = $detail
+        $s.status = 'done'
       }
-    }
-
-    Write-Host "[start] $label" -ForegroundColor Cyan
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
-
-    try {
-      if ($task.kind -eq 'direct') {
-        $dest = Join-Path $destDir $task.name
-        if (Test-Path $dest) { Tick 'skip' $label "$($task.name) already downloaded"; return }
-        if ($dryRun)         { Tick 'dry-run' $label "$($task.url) -> $dest"; return }
-        Save-WithProgress -Url $task.url -Dest $dest -Id $task.id -Activity $task.name
-        $mb = [math]::Round((Get-Item $dest).Length / 1MB, 1)
-        $s  = [math]::Round($sw.Elapsed.TotalSeconds, 1)
-        Tick 'done' $label "$($task.name), $mb MB, ${s}s"
+      catch {
+        $s.status = 'err'
+        $s.detail = $_.Exception.Message
       }
-      elseif ($task.kind -eq 'github') {
-        $slug  = "$($task.owner)/$($task.repo)"
-        $info  = gh release view --repo $slug --json tagName,assets | ConvertFrom-Json
-        $asset = $info.assets | Where-Object { $_.name -like $task.pattern } | Select-Object -First 1
-        if (-not $asset) { Tick 'err' $label "no asset matching '$($task.pattern)' in $($info.tagName)"; return }
-        $dest = Join-Path $destDir $asset.name
-        if (Test-Path $dest) { Tick 'skip' $label "$($asset.name) already downloaded"; return }
-        if ($dryRun)         { Tick 'dry-run' $label "$($asset.name) -> $dest"; return }
-        Save-WithProgress -Url $asset.url -Dest $dest -Id $task.id -Activity $asset.name -ExpectedSize ([long]$asset.size)
-        $mb = [math]::Round((Get-Item $dest).Length / 1MB, 1)
-        $s  = [math]::Round($sw.Elapsed.TotalSeconds, 1)
-        Tick 'done' $label "$($asset.name), $mb MB, ${s}s, $($info.tagName)"
+      finally {
+        $s.elapsed = [math]::Round($sw.Elapsed.TotalSeconds, 1)
       }
-    }
-    catch {
-      Tick 'err' $label $_.Exception.Message
     }
   }
+
+  # Main-thread render loop. Polls state, renders Write-Progress per task, and
+  # prints a terminal status line once per task as it transitions to a terminal
+  # state. Exits when every task has been emitted.
+  $emitted   = @{}
+  $tickCount = 0
+  $totalCount = $downloadItems.Count
+
+  while ($emitted.Count -lt $totalCount) {
+    foreach ($task in $downloadItems) {
+      $s = $state[$task.id]
+      if ($emitted[$task.id]) { continue }
+
+      if ($s.status -eq 'downloading' -and $s.total -gt 0) {
+        $pct = [int][math]::Min(100, ($s.written * 100) / $s.total)
+        $mb  = [math]::Round($s.written / 1MB, 1)
+        $tot = [math]::Round($s.total / 1MB, 1)
+        Write-Progress -Id $task.id -Activity $s.activity -Status "$mb / $tot MB ($pct%)" -PercentComplete $pct
+      }
+
+      if ($s.status -in 'done','skip','dry-run','err') {
+        Write-Progress -Id $task.id -Activity $s.activity -Completed
+        $tickCount++
+        $msg = "[{0}/{1}] {2}: {3}" -f $tickCount, $totalCount, $s.status, $s.label
+        $detail = $s.detail
+        if ($s.status -eq 'done' -and $s.elapsed -gt 0) { $detail += ", $($s.elapsed)s" }
+        if ($detail) { $msg += " ($detail)" }
+        $color = switch ($s.status) {
+          'done'    { 'Green' }
+          'skip'    { 'DarkGray' }
+          'dry-run' { 'DarkGray' }
+          'err'     { 'Red' }
+          default   { 'Gray' }
+        }
+        Write-Host $msg -ForegroundColor $color
+        $emitted[$task.id] = $true
+      }
+    }
+    if ($emitted.Count -lt $totalCount) { Start-Sleep -Milliseconds 100 }
+  }
+
+  $jobs | Receive-Job -ErrorAction SilentlyContinue | Out-Null
+  $jobs | Remove-Job -Force
 }
 
 # ----- Magisk uninstall.zip safety net (after downloads) -----
