@@ -1,0 +1,14 @@
+{
+  "name": "ganymede-lineageos",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Printable LineageOS 17.1 flashing guide for Lenovo TB-X304F",
+  "scripts": {
+    "build": "md-to-pdf guide.md --config-file pdf.config.js",
+    "restore": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/restore.ps1",
+    "restore:check": "pwsh -NoProfile -ExecutionPolicy Bypass -File ./scripts/restore.ps1 -DryRun"
+  },
+  "devDependencies": {
+    "md-to-pdf": "^5.2.4"
+  }
+}
