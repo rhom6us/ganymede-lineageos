@@ -13,7 +13,7 @@ This repo contains a printable flashing guide and helper scripts for installing
 ## Three corrections applied (vs original chat draft)
 
 1. **arm64**, not arm. SD425 is ARMv8. MindTheGapps **10.0 arm64**, APKMirror sideloads use **arm64-v8a**.
-2. Magisk install zip needs an **uninstall.zip** copy on the microSD as a safety net (TWRP-flashable to remove Magisk cleanly).
+2. Magisk installs via the canonical patched-`boot.img` path (boot LOS, app patches, `fastboot flash boot magisk_patched.img`). topjohnwu deprecated the TWRP zip-flash path in v30.7. Keep an `uninstall.zip` rename of the APK on the SD card as the TWRP-side bootloop safety net (substring detection verified in `update_binary.sh` at the v30.7 tag) and a clean LOS `boot.img` on the host as the fastboot-side recovery.
 3. Use `winget install Google.PlatformTools` instead of manual zip extraction.
 
 ## Layout
@@ -49,7 +49,7 @@ To add an artifact, edit `artifacts.json` only — `restore.ps1` doesn't need ch
 ## Decisions / context worth carrying forward
 
 - **No EDL / BLUnlocker path.** Skip QDLoader, devinfo hex edits, firehose `.mbn` — not needed. OEM unlock toggle is on.
-- **Flash order:** LineageOS → GApps → Magisk (no reboots between). Wipe cache/dalvik once at end.
+- **Flash order:** LineageOS → GApps in TWRP (no reboot between, wipe cache/dalvik after GApps). Reboot to LOS, finish OOBE, then install Magisk via the canonical patched-`boot.img` path (Magisk app patches LOS `boot.img`, `fastboot flash boot magisk_patched.img`). The TWRP zip-flash path for Magisk is officially deprecated in v30.7 and avoided here.
 - **TWRP — boot temporarily OR flash, but don't let stock Android boot between TWRP-install and LOS-flash.** Stock Android's `install-recovery.sh` re-writes `/recovery` on boot. The handoff's "booting TWRP is unreliable" claim isn't supported by research — `fastboot boot twrp.img` is the *preferred* community approach. Either path works.
 - **Format Data is mandatory** before LOS flash. Stock 8.1 encryption is incompatible with LOS 17.1.
 - **First boot is 5–10 min.** Multiple bootloop reports in the XDA thread are impatient flashers.

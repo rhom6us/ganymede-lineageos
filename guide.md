@@ -23,13 +23,25 @@ Run `npm run restore` from this repo to fetch the items marked **[auto]** into `
 
 **XDA thread:** `https://xdaforums.com/t/rom-unofficial-10-0-tb-x304f-tb-8504f-lineageos-17-1-for-lenovo-tab4-8-10-wifi.4466879/`
 
-### Magisk: rename + create `uninstall.zip`
+### Magisk artifacts
 
 After download (handled by `restore.ps1`):
-1. `Magisk-vXX.X.apk` → copied to `Magisk-vXX.X.zip`
-2. The same APK → copied to `uninstall.zip`
 
-Both end up on the tablet's microSD before flashing. The `uninstall.zip`, flashed via TWRP, cleanly removes Magisk if the boot partition gets stuck after root.
+1. `Magisk-vXX.X.apk` — the install file. Sideloaded onto LOS in Part 6 and used to patch `boot.img`.
+2. `uninstall.zip` — same APK renamed. TWRP-flashable bootloop safety net. Magisk's installer routes to the uninstaller when the zip path matches the substring `uninstall` (`scripts/update_binary.sh` at the v30.7 tag).
+
+The `Magisk-vXX.X.zip` produced by `restore.ps1` is leftover from the deprecated TWRP zip-flash path and isn't used in this guide. Harmless; ignore it.
+
+### Save a clean LOS `boot.img` for fastboot recovery
+
+Extract `boot.img` from the LOS zip on the host PC and keep a copy outside `downloads/`:
+
+```pwsh
+Expand-Archive downloads/lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip -DestinationPath downloads/_los-extracted -Force
+Copy-Item downloads/_los-extracted/boot.img boot-stock-los.img
+```
+
+This is your fastboot-side recovery: `fastboot flash boot boot-stock-los.img` returns to LOS-without-Magisk if root ever wedges the boot partition.
 
 ---
 
@@ -120,7 +132,7 @@ Choose **Keep Read Only** when prompted, skip the password prompt (no encryption
 
 ---
 
-## Part 5 — Flash LineageOS + GApps + Magisk
+## Part 5 — Flash LineageOS + GApps in TWRP
 
 ### Push files to the tablet
 
@@ -129,11 +141,12 @@ From host PC, with the tablet in TWRP:
 ```
 adb push lineage-17.1-*-x304.zip          /sdcard/
 adb push MindTheGapps-10.0.0-arm64-*.zip  /sdcard/
-adb push Magisk-vXX.X.zip                 /sdcard/
 adb push uninstall.zip                    /sdcard/
 ```
 
 (Or pre-load the microSD on the host and insert it.)
+
+`uninstall.zip` rides along here so it lives on the device for the bootloop safety net later — it isn't flashed in this Part.
 
 ### Wipe → Format Data
 
@@ -143,42 +156,75 @@ In TWRP:
 2. **Wipe → Format Data** → type `yes`. **Mandatory.** Stock 8.1 encryption is incompatible with LOS 17.1.
 3. Back to main menu.
 
-### Flash in order, no reboots between
+### Flash LineageOS, then GApps
 
 1. **Install** → select `lineage-17.1-*.zip` → swipe.
 2. After it completes: **Install** → `MindTheGapps-10.0.0-arm64-*.zip` → swipe.
-3. After it completes: **Install** → `Magisk-vXX.X.zip` → swipe.
-4. **Wipe → Advanced Wipe** → Dalvik + Cache → swipe (just these two).
-5. **Reboot → System**.
+3. **Wipe → Advanced Wipe** → Dalvik + Cache → swipe (just these two).
+4. **Reboot → System**.
+
+Magisk is **not** flashed in TWRP. The canonical path is to install it from a booted LOS in Part 6 — topjohnwu deprecated the TWRP zip-flash path in v30.7.
 
 If the device hangs at the boot logo for **more than ~10 minutes**, see Troubleshooting.
 
 ---
 
-## Part 6 — First boot & root verification
+## Part 6 — First boot, install Magisk (canonical path), verify
 
-- First boot is **5–10 minutes**. Don't interrupt.
-- Walk through setup; skip Google sign-in if you want a clean check first.
-- Open the **Magisk** app (auto-installed). It will prompt to "complete the install" and reboot once. Allow it.
-- After the second reboot, Magisk → Superuser tab is empty until apps request root. Confirm version is current and "Installed" matches "App version" with no delta.
+### First boot
+
+- 5–10 minutes. Don't interrupt.
+- Walk through OOBE. Sign into Google when prompted (Play Store + Services need it).
+- Re-enable **Developer options** + **USB debugging** (factory reset wiped the earlier setting). Re-authorize the host PC's RSA fingerprint when `adb` prompts.
+
+### Install Magisk via patched `boot.img`
+
+This is the topjohnwu-recommended install path for v30.7. The Magisk app patches the LOS `boot.img` on-device; you flash the patched version via fastboot.
+
+```pwsh
+# On the host:
+adb install downloads/Magisk-v30.7.apk
+
+# Push the LOS boot.img extracted in Part 1:
+adb push boot-stock-los.img /sdcard/Download/boot.img
+```
+
+On the tablet:
+
+1. Open **Magisk**. It will offer to "complete the install" — accept; it sets up the app.
+2. Tap **Install** → **Select and Patch a File** → pick `boot.img` from `Download/`.
+3. Magisk emits `magisk_patched-XXXXX_YYYYY.img` to `/sdcard/Download/`. Note the filename.
+
+Back on the host:
+
+```pwsh
+adb pull /sdcard/Download/magisk_patched-*.img .
+adb reboot bootloader
+fastboot flash boot magisk_patched-*.img
+fastboot reboot
+```
 
 ### Test root
 
 - Install **Termux** (F-Droid is fine, or sideload).
 - `su` should pop a Magisk grant prompt. Approve. Prompt then shows a `#` shell.
+- Confirm Magisk app shows "Installed" matching the app version.
 
-### Confirm GApps
+### Confirm GApps + target apps
 
-- Sign into Play Store. Install **Crunchyroll** → it should run normally.
-- (Optional) Install **Prime Video** → also fine; root-tolerant.
-- (Optional) **Netflix / Hulu** → see Appendix A; expect failure without PIF.
+- **Crunchyroll** — install from Play Store → should run normally, plays 1080p (Widevine L3 outlier).
+- **Amazon Prime Video** — Play Store → fine; root-tolerant. SD ceiling on L3.
+- **Microsoft Edge**, **Bitwarden**, **Anthropic Claude** — Play Store, no special setup.
+- **Netflix / Hulu** (later) — see Appendix A; expect failure without PIF.
 
 ---
 
 ## Troubleshooting
 
 - **Stuck at LineageOS boot logo > 10 min.** Boot back into TWRP (Power + VolUp at boot) → Wipe → Advanced Wipe → Dalvik + Cache → swipe → reboot system.
-- **Bootloop after Magisk.** Boot into TWRP → flash `uninstall.zip` → reboot. Device returns to LOS without root.
+- **Bootloop after Magisk.** Two recoveries, either works:
+  - **TWRP path:** boot into TWRP → flash `uninstall.zip` → reboot. Magisk's installer detects the substring `uninstall` in the path and routes to the uninstaller.
+  - **Fastboot path:** `adb reboot bootloader` from anywhere it gets that far, otherwise hold **Power + VolDown** from off → `fastboot flash boot boot-stock-los.img` (the clean LOS boot.img saved in Part 1) → `fastboot reboot`.
 - **`fastboot oem unlock-go` rejected.** OEM unlocking toggle is off. Boot back to system, re-enable in Developer options, retry.
 - **TWRP overwritten on first boot.** Stock Android booted before you got into recovery. Re-flash TWRP from fastboot, then immediately Volume Up + Power on reboot.
 - **`adb devices` empty.** Drivers / cable. Check Device Manager for unrecognized devices, accept the RSA prompt on the tablet, try a different USB-A port.
@@ -201,6 +247,7 @@ fastboot reboot recovery
 # Flashing
 fastboot oem unlock-go
 fastboot flash recovery tbx304-twrp-3.4.0-20201207.img
+fastboot flash boot magisk_patched-*.img
 adb push <file> /sdcard/
 ```
 

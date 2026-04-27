@@ -78,38 +78,75 @@ Run state checks first, then proceed from whichever Part the user is on.
 - User confirms TWRP appeared. If not, retry from re-entering fastboot (`Power + VolDown` from off).
 - TWRP prompts: choose "Keep Read Only", skip the password prompt.
 
-### Part 5 — Flash LOS + GApps + Magisk
+### Part 5 — Flash LOS + GApps in TWRP
 
 - Tablet is in TWRP. `adb` works again (TWRP exposes adb).
-- Push files:
+- Push files (no Magisk zip — that goes via Path B in Part 6):
   ```
   adb push downloads/lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip /sdcard/
   adb push downloads/MindTheGapps-10.0.0-arm64-*.zip               /sdcard/
-  adb push downloads/Magisk-v*.zip                                  /sdcard/
   adb push downloads/uninstall.zip                                  /sdcard/
   ```
+  `uninstall.zip` rides along now so the bootloop safety net lives on the device.
 - Walk user through TWRP UI (you can't drive it; it's touch-only):
   1. Wipe → Advanced Wipe → Dalvik / Cache / System / Data → swipe.
   2. Wipe → Format Data → type `yes`.
   3. Install → LineageOS zip → swipe.
   4. After complete: Install → MindTheGapps zip → swipe.
-  5. After complete: Install → Magisk zip → swipe.
-  6. Wipe → Advanced Wipe → Dalvik + Cache → swipe (just these two).
-  7. Reboot → System.
+  5. Wipe → Advanced Wipe → Dalvik + Cache → swipe (just these two).
+  6. Reboot → System.
 - After each step, ask user to confirm before moving on. If TWRP errors, consult `guide.md` Troubleshooting.
 
-### Part 6 — First boot + verification
+### Part 6 — First boot, install Magisk (canonical path), verify
 
 - First boot is **5–10 minutes**. Tell the user not to touch it.
-- After boot, `adb shell getprop ro.build.version.release` should return `10`.
-- Walk user through Magisk first-launch (it'll prompt to "complete the install" and reboot).
+- After boot, walk user through OOBE (Google sign-in needed for Play Store).
+- User must re-enable Developer options + USB debugging (factory reset wiped the earlier setting). When `adb` reauths, re-approve on the tablet.
+- Verify LOS booted clean: `adb shell getprop ro.build.version.release` returns `10`.
+
+#### Install Magisk via patched `boot.img`
+
+This is the topjohnwu-recommended path for v30.7 (TWRP zip-flash is officially deprecated). Steps the agent runs (user only taps the Magisk app):
+
+1. Extract the LOS `boot.img` if not already present:
+   ```
+   Expand-Archive downloads/lineage-17.1-*.zip -DestinationPath downloads/_los-extracted -Force
+   Copy-Item downloads/_los-extracted/boot.img boot-stock-los.img
+   ```
+   (If `boot.img` is not at the LOS zip top level, run `unzip -l` first to locate it; report and pause.)
+2. Sideload Magisk + push the boot image:
+   ```
+   adb install downloads/Magisk-v*.apk
+   adb push boot-stock-los.img /sdcard/Download/boot.img
+   ```
+3. Tell user: "Open Magisk → Install → Select and Patch a File → pick `boot.img` from Download. It writes a `magisk_patched-XXXXX_YYYYY.img` to the same folder. Tell me the filename when it's done."
+4. After user confirms:
+   ```
+   adb pull /sdcard/Download/magisk_patched-*.img .
+   adb reboot bootloader
+   ```
+5. Wait for `fastboot devices`, then:
+   ```
+   fastboot flash boot magisk_patched-*.img
+   fastboot reboot
+   ```
+6. After LOS reboots, Magisk app may prompt to "complete the install" with another reboot. Allow it.
+
+#### Verification
+
 - Test root:
   ```
   adb shell su -c id
   ```
-  Expect `uid=0(root)`. The user has to approve the Magisk grant prompt on the tablet.
-- Verify GApps: `adb shell pm list packages | grep gms` should list Google services.
-- Optionally walk through Appendix A (PIF + TrickyStore for Netflix/Hulu) if the user wants it now.
+  Expect `uid=0(root)`. User approves the Magisk grant prompt on the tablet.
+- Verify GApps: `adb shell pm list packages | grep gms` lists Google services.
+- Confirm target apps install from Play Store: Crunchyroll, Prime Video, Edge, Bitwarden, Claude.
+- Optionally walk through Appendix A (PIF for Netflix/Hulu) if the user wants it now.
+
+#### If Magisk install bootloops
+
+- TWRP path: `adb reboot recovery` (or button combo) → flash `uninstall.zip` (already on /sdcard) → reboot.
+- Fastboot path: `adb reboot bootloader` → `fastboot flash boot boot-stock-los.img` → `fastboot reboot`. The clean LOS `boot.img` was saved on the host in step 1.
 
 ## Style rules
 
