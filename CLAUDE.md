@@ -49,6 +49,10 @@ This repo contains a printable flashing guide and helper scripts for installing
 - Don't pad with brick/warranty disclaimers — risk is accepted.
 - Don't over-explain shell or PowerShell. User is TS/JS/C# expert, comfortable in C++/Python.
 
+## Commit discipline
+
+Commit your work as each task completes. One logical change per commit, atomic — don't batch unrelated edits into a single commit, and don't leave finished work uncommitted across tasks. If a single user request spans multiple independent changes, commit them separately as you finish each one.
+
 ## Source URLs
 
 | Item | URL |
