@@ -1,0 +1,52 @@
+[
+  {
+    "kind": "winget",
+    "package": "Google.PlatformTools",
+    "label": "platform-tools"
+  },
+  {
+    "kind": "direct",
+    "id": 1,
+    "label": "LineageOS 17.1 ROM (Wasabi mirror)",
+    "url": "https://s3.us-west-1.wasabisys.com/rom-release/LineageOS/17.1/TB-X304F/lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip",
+    "name": "lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip"
+  },
+  {
+    "kind": "github",
+    "id": 2,
+    "owner": "topjohnwu",
+    "repo": "Magisk",
+    "pattern": "Magisk-v*.apk"
+  },
+  {
+    "kind": "github",
+    "id": 3,
+    "owner": "MindTheGapps",
+    "repo": "10.0.0-arm64",
+    "pattern": "MindTheGapps-10.0.0-arm64-*.zip"
+  },
+  {
+    "kind": "github",
+    "id": 4,
+    "owner": "osm0sis",
+    "repo": "PlayIntegrityFork",
+    "pattern": "*.zip"
+  },
+  {
+    "kind": "github",
+    "id": 5,
+    "owner": "5ec1cff",
+    "repo": "TrickyStore",
+    "pattern": "*.zip"
+  },
+  {
+    "kind": "manual",
+    "name": "LineageOS 17.1 zip for TB-X304F",
+    "source": "https://xdaforums.com/t/rom-unofficial-10-0-tb-x304f-tb-8504f-lineageos-17-1-for-lenovo-tab4-8-10-wifi.4466879/"
+  },
+  {
+    "kind": "manual",
+    "name": "tbx304-twrp-3.4.0-20201207.img",
+    "source": "https://xdaforums.com/t/rom-unofficial-10-0-tb-x304f-tb-8504f-lineageos-17-1-for-lenovo-tab4-8-10-wifi.4466879/"
+  }
+]
