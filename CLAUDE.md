@@ -20,7 +20,8 @@ This repo contains a printable flashing guide and helper scripts for installing
 
 - `guide.md` — printable guide, source for the PDF
 - `pdf.config.js` — md-to-pdf config (5.5"×8.5", 0.5" margins, page numbers)
-- `scripts/restore.ps1` — installs platform-tools (winget) and downloads flashable artifacts to `downloads/`
+- `scripts/restore.ps1` — driver: installs winget items and downloads flashable artifacts to `downloads/` (in parallel, with per-file progress bars)
+- `scripts/artifacts.json` — the actual artifact list; `restore.ps1` reads this and dispatches by `kind`
 - `research/` — research notes; bootstrap memory for future Claude sessions
 - `package.json` — `build` (PDF) and `restore` (downloads)
 
@@ -29,6 +30,21 @@ This repo contains a printable flashing guide and helper scripts for installing
 - `npm run build` — produce `guide.pdf` from `guide.md`
 - `npm run restore` — install platform-tools + download flashable artifacts to `downloads/`
 - `npm run restore:check` — dry-run of the above
+
+## `scripts/artifacts.json`
+
+Flat array of artifact entries. `restore.ps1` dispatches each by its `kind`:
+
+| `kind`   | Required fields                          | Behavior |
+|----------|------------------------------------------|----------|
+| `winget` | `package`, `label`                       | Sequential `winget install --id <package>`. Idempotent (skips if already installed). |
+| `direct` | `id`, `label`, `url`, `name`             | Parallel HttpClient download from `url` to `downloads/<name>`. |
+| `github` | `id`, `owner`, `repo`, `pattern`         | Parallel: resolves the latest release asset matching `pattern` via `gh release view --json`, then downloads `asset.url`. |
+| `manual` | `name`, `source`                         | Not automated — printed at the end with `from: <source>` so the user fetches it themselves. |
+
+`id` is the `Write-Progress -Id` slot for the parallel download bars; it must be unique across `direct`/`github` entries (winget/manual don't need one).
+
+To add an artifact, edit `artifacts.json` only — `restore.ps1` doesn't need changing.
 
 ## Decisions / context worth carrying forward
 
