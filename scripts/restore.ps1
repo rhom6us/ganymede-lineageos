@@ -36,23 +36,24 @@ if (-not $winget) {
 }
 
 # ----- parallel downloads -----
+# Each task gets a unique ProgressId so Write-Progress bars stack instead of
+# colliding. Invoke-WebRequest's default progress uses Id 1 across all callers,
+# so we stream via HttpClient and drive Write-Progress ourselves with the
+# per-task id.
 $tasks = @(
-  [pscustomobject]@{
-    Kind  = 'direct'
-    Label = 'LineageOS 17.1 ROM (Wasabi mirror)'
-    Url   = 'https://s3.us-west-1.wasabisys.com/rom-release/LineageOS/17.1/TB-X304F/lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip'
-    Name  = 'lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip'
-  }
-  [pscustomobject]@{ Kind='github'; Owner='topjohnwu';    Repo='Magisk';            Pattern='Magisk-v*.apk' }
-  [pscustomobject]@{ Kind='github'; Owner='MindTheGapps'; Repo='10.0.0-arm64';      Pattern='MindTheGapps-10.0.0-arm64-*.zip' }
-  [pscustomobject]@{ Kind='github'; Owner='osm0sis';      Repo='PlayIntegrityFork'; Pattern='*.zip' }
-  [pscustomobject]@{ Kind='github'; Owner='5ec1cff';      Repo='TrickyStore';       Pattern='*.zip' }
+  [pscustomobject]@{ ProgressId=1; Kind='direct'; Label='LineageOS 17.1 ROM (Wasabi mirror)'
+                     Url='https://s3.us-west-1.wasabisys.com/rom-release/LineageOS/17.1/TB-X304F/lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip'
+                     Name='lineage-17.1-20220710-UNOFFICIAL-TBX304F.zip' }
+  [pscustomobject]@{ ProgressId=2; Kind='github'; Owner='topjohnwu';    Repo='Magisk';            Pattern='Magisk-v*.apk' }
+  [pscustomobject]@{ ProgressId=3; Kind='github'; Owner='MindTheGapps'; Repo='10.0.0-arm64';      Pattern='MindTheGapps-10.0.0-arm64-*.zip' }
+  [pscustomobject]@{ ProgressId=4; Kind='github'; Owner='osm0sis';      Repo='PlayIntegrityFork'; Pattern='*.zip' }
+  [pscustomobject]@{ ProgressId=5; Kind='github'; Owner='5ec1cff';      Repo='TrickyStore';       Pattern='*.zip' }
 )
 
 $total    = $tasks.Count
 $progress = [System.Collections.Concurrent.ConcurrentBag[string]]::new()
 
-Write-Step "downloading $total artifacts (up to $Throttle in parallel)"
+Write-Step "downloading $total artifacts (up to $Throttle in parallel, with progress bars)"
 
 $tasks | ForEach-Object -ThrottleLimit $Throttle -Parallel {
   $task     = $_
@@ -62,7 +63,7 @@ $tasks | ForEach-Object -ThrottleLimit $Throttle -Parallel {
   $total    = $using:total
 
   $ErrorActionPreference = 'Stop'
-  $ProgressPreference    = 'SilentlyContinue'
+  $ProgressPreference    = 'Continue'
 
   $label = if ($task.Kind -eq 'direct') { $task.Label } else { "$($task.Owner)/$($task.Repo)" }
 
@@ -82,6 +83,47 @@ $tasks | ForEach-Object -ThrottleLimit $Throttle -Parallel {
     Write-Host $msg -ForegroundColor $color
   }
 
+  function Save-WithProgress {
+    param([string]$Url, [string]$Dest, [int]$Id, [string]$Activity, [long]$ExpectedSize = 0)
+    $client = [System.Net.Http.HttpClient]::new()
+    $client.Timeout = [TimeSpan]::FromMinutes(30)
+    $client.DefaultRequestHeaders.Add('User-Agent', 'restore-ps1')
+    try {
+      $resp = $client.GetAsync($Url, [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead).GetAwaiter().GetResult()
+      $resp.EnsureSuccessStatusCode() | Out-Null
+      $size = if ($ExpectedSize -gt 0) { $ExpectedSize } else { [long]($resp.Content.Headers.ContentLength ?? 0) }
+      $stream = $resp.Content.ReadAsStreamAsync().GetAwaiter().GetResult()
+      $file   = [System.IO.File]::Create($Dest)
+      try {
+        $buffer  = [byte[]]::new(262144)
+        $written = [long]0
+        $last    = [DateTime]::MinValue
+        while (($n = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+          $file.Write($buffer, 0, $n)
+          $written += $n
+          $now = [DateTime]::UtcNow
+          if (($now - $last).TotalMilliseconds -ge 100) {
+            $last = $now
+            $mb = [math]::Round($written / 1MB, 1)
+            if ($size -gt 0) {
+              $pct = [int][math]::Min(100, ($written * 100) / $size)
+              $tot = [math]::Round($size / 1MB, 1)
+              Write-Progress -Id $Id -Activity $Activity -Status "$mb / $tot MB ($pct%)" -PercentComplete $pct
+            } else {
+              Write-Progress -Id $Id -Activity $Activity -Status "$mb MB"
+            }
+          }
+        }
+      } finally {
+        $file.Close()
+        $stream.Close()
+      }
+    } finally {
+      $client.Dispose()
+      Write-Progress -Id $Id -Activity $Activity -Completed
+    }
+  }
+
   Write-Host "[start] $label" -ForegroundColor Cyan
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
@@ -90,7 +132,7 @@ $tasks | ForEach-Object -ThrottleLimit $Throttle -Parallel {
       $dest = Join-Path $destDir $task.Name
       if (Test-Path $dest) { Tick 'skip' $label "$($task.Name) already downloaded"; return }
       if ($dryRun)         { Tick 'dry-run' $label "$($task.Url) -> $dest"; return }
-      Invoke-WebRequest -Uri $task.Url -OutFile $dest
+      Save-WithProgress -Url $task.Url -Dest $dest -Id $task.ProgressId -Activity $task.Name
       $mb = [math]::Round((Get-Item $dest).Length / 1MB, 1)
       $s  = [math]::Round($sw.Elapsed.TotalSeconds, 1)
       Tick 'done' $label "$($task.Name), $mb MB, ${s}s"
@@ -103,7 +145,7 @@ $tasks | ForEach-Object -ThrottleLimit $Throttle -Parallel {
       $dest = Join-Path $destDir $asset.name
       if (Test-Path $dest) { Tick 'skip' $label "$($asset.name) already downloaded"; return }
       if ($dryRun)         { Tick 'dry-run' $label "$($asset.name) -> $dest"; return }
-      gh release download --repo $slug --pattern $asset.name --dir $destDir | Out-Null
+      Save-WithProgress -Url $asset.url -Dest $dest -Id $task.ProgressId -Activity $asset.name -ExpectedSize ([long]$asset.size)
       $mb = [math]::Round((Get-Item $dest).Length / 1MB, 1)
       $s  = [math]::Round($sw.Elapsed.TotalSeconds, 1)
       Tick 'done' $label "$($asset.name), $mb MB, ${s}s, $($info.tagName)"
