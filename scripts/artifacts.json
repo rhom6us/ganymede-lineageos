@@ -14,6 +14,7 @@
   {
     "kind": "github",
     "id": 2,
+    "label": "Magisk",
     "owner": "topjohnwu",
     "repo": "Magisk",
     "pattern": "Magisk-v*.apk"
@@ -21,6 +22,7 @@
   {
     "kind": "github",
     "id": 3,
+    "label": "MindTheGapps 10.0 arm64",
     "owner": "MindTheGapps",
     "repo": "10.0.0-arm64",
     "pattern": "MindTheGapps-10.0.0-arm64-*.zip"
@@ -28,21 +30,18 @@
   {
     "kind": "github",
     "id": 4,
+    "label": "PlayIntegrityFork",
     "owner": "osm0sis",
     "repo": "PlayIntegrityFork",
-    "pattern": "*.zip"
+    "pattern": "PlayIntegrityFork-v*.zip"
   },
   {
     "kind": "github",
     "id": 5,
+    "label": "TrickyStore",
     "owner": "5ec1cff",
     "repo": "TrickyStore",
-    "pattern": "*.zip"
-  },
-  {
-    "kind": "manual",
-    "name": "LineageOS 17.1 zip for TB-X304F",
-    "source": "https://xdaforums.com/t/rom-unofficial-10-0-tb-x304f-tb-8504f-lineageos-17-1-for-lenovo-tab4-8-10-wifi.4466879/"
+    "pattern": "Tricky-Store-v*.zip"
   },
   {
     "kind": "manual",
